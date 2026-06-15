@@ -16,16 +16,24 @@ export interface QiankunWindow {
   [x: string]: any
 }
 
+declare global {
+  interface Window {
+    moudleQiankunAppLifeCycles?: Record<string, QiankunLifeCycle>
+    qiankunName?: string
+  }
+}
+
 export const qiankunWindow: QiankunWindow = typeof window !== 'undefined' ? (window.proxy || window) : {}
 
-export const renderWithQiankun = (qiankunLifeCycle: QiankunLifeCycle) => {
+export const renderWithQiankun = (qiankunLifeCycle: QiankunLifeCycle, name?: string) => {
   // 函数只有一次执行机会，需要把生命周期赋值给全局
   if (qiankunWindow?.__POWERED_BY_QIANKUN__) {
     if (!window.moudleQiankunAppLifeCycles) {
       window.moudleQiankunAppLifeCycles = {}
     }
-    if (qiankunWindow.qiankunName) {
-      window.moudleQiankunAppLifeCycles[qiankunWindow.qiankunName] = qiankunLifeCycle
+    const qiankunName = name || window.qiankunName || qiankunWindow.qiankunName
+    if (qiankunName) {
+      window.moudleQiankunAppLifeCycles[qiankunName] = qiankunLifeCycle
     }
   }
 }

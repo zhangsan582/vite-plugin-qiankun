@@ -1,10 +1,35 @@
 import cheerio, { CheerioAPI, Element } from 'cheerio'
 import { PluginOption } from 'vite'
 
+const helperIds = new Set([
+  'vite-plugin-qiankun/dist/helper',
+  'vite-plugin-qiankun/es/helper'
+])
+const virtualHelperId = '\0vite-plugin-qiankun:helper'
+
+const createHelper = (qiankunName: string) => `
+  export const qiankunWindow = typeof window !== 'undefined' ? (window.proxy || window) : {};
+
+  export const renderWithQiankun = (qiankunLifeCycle, name) => {
+    if (qiankunWindow && qiankunWindow.__POWERED_BY_QIANKUN__) {
+      if (!window.moudleQiankunAppLifeCycles) {
+        window.moudleQiankunAppLifeCycles = {};
+      }
+      const appName = name || '${qiankunName}' || window.qiankunName || qiankunWindow.qiankunName;
+      if (appName) {
+        window.moudleQiankunAppLifeCycles[appName] = qiankunLifeCycle;
+      }
+    }
+  };
+
+  export default renderWithQiankun;
+`
+
 const createQiankunHelper = (qiankunName: string) => `
+  const qiankunProxy = window.proxy;
   const createDeffer = (hookName) => {
     const d = new Promise((resolve, reject) => {
-      window.proxy && (window.proxy[\`vite\${hookName}\`] = resolve)
+      qiankunProxy && (qiankunProxy[\`vite\${hookName}\`] = resolve)
     })
     return props => d.then(fn => fn(props));
   }
@@ -19,7 +44,8 @@ const createQiankunHelper = (qiankunName: string) => `
       bootstrap,
       mount,
       unmount,
-      update
+      update,
+      __viteQiankunProxy: qiankunProxy
     };
   })(window);
 `
@@ -36,11 +62,13 @@ const replaceSomeScript = ($: CheerioAPI, findStr: string, replaceStr: string = 
 const createImportFinallyResolve = (qiankunName: string) => {
   return `
     const qiankunLifeCycle = window.moudleQiankunAppLifeCycles && window.moudleQiankunAppLifeCycles['${qiankunName}'];
-    if (qiankunLifeCycle) {
-      window.proxy.vitemount((props) => qiankunLifeCycle.mount(props));
-      window.proxy.viteunmount((props) => qiankunLifeCycle.unmount(props));
-      window.proxy.vitebootstrap(() => qiankunLifeCycle.bootstrap());
-      window.proxy.viteupdate((props) => qiankunLifeCycle.update(props));
+    const qiankunApp = window['${qiankunName}'];
+    const qiankunProxy = qiankunApp && qiankunApp.__viteQiankunProxy ? qiankunApp.__viteQiankunProxy : window.proxy;
+    if (qiankunLifeCycle && qiankunProxy) {
+      qiankunProxy.vitemount((props) => qiankunLifeCycle.mount(props));
+      qiankunProxy.viteunmount((props) => qiankunLifeCycle.unmount(props));
+      qiankunProxy.vitebootstrap(() => qiankunLifeCycle.bootstrap());
+      qiankunProxy.viteupdate((props) => qiankunLifeCycle.update(props));
     }
   `
 }
@@ -62,7 +90,7 @@ const htmlPlugin: PluginFn = (qiankunName, microOption = {}) => {
     const moduleSrc = script$.attr('src')
     let appendBase = ''
     if (microOption.useDevMode && !isProduction) {
-      appendBase = '(window.proxy ? (window.proxy.__INJECTED_PUBLIC_PATH_BY_QIANKUN__ + \'..\') : \'\') + '
+      appendBase = `((window['${qiankunName}'] && window['${qiankunName}'].__viteQiankunProxy) ? (window['${qiankunName}'].__viteQiankunProxy.__INJECTED_PUBLIC_PATH_BY_QIANKUN__ + '..') : '') + `
     }
     script$.removeAttr('src')
     script$.removeAttr('type')
@@ -72,9 +100,22 @@ const htmlPlugin: PluginFn = (qiankunName, microOption = {}) => {
 
   return {
     name: 'qiankun-html-transform',
+    enforce: 'pre',
     configResolved (config) {
       isProduction = config.command === 'build' || config.isProduction
       base = config.base
+    },
+
+    resolveId (id) {
+      if (helperIds.has(id)) {
+        return virtualHelperId
+      }
+    },
+
+    load (id) {
+      if (id === virtualHelperId) {
+        return createHelper(qiankunName)
+      }
     },
 
     configureServer (server) {
@@ -114,7 +155,7 @@ const htmlPlugin: PluginFn = (qiankunName, microOption = {}) => {
         }
       })
 
-      $('body').append(`<script>${createQiankunHelper(qiankunName)}</script>`)
+      $('body').prepend(`<script>${createQiankunHelper(qiankunName)}</script>`)
       const output = $.html()
       return output
     }
